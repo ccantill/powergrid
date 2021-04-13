@@ -1,5 +1,5 @@
 import override from "../override.js";
-import utils from "../utils.js";
+import utils, {filterEvent} from "../utils.js";
 
 export default {
     loadFirst: ['filtering'],
@@ -80,17 +80,15 @@ export default {
                         }
                     }
 
-                    this.container
-                        .on("mousedown", ".pg-resizehandle", startResize)
-                        .on("mousemove", doResize)
-                        .on("click", ".pg-resizehandle", function (event) {
+                    this.container.addEventListener("mousedown", filterEvent(".pg-resizehandle", startResize));
+                    this.container.addEventListener("mousemove", doResize);
+                    this.container.addEventListener("click", filterEvent(".pg-resizehandle", function (event) {
                             event.stopImmediatePropagation();
                             event.preventDefault();
                             event.stopPropagation();
-                        });
+                        }));
 
-                    $(window)
-                        .on("mouseup", endResize);
+                    window.addEventListener("mouseup", endResize);
                 }
             }
         });

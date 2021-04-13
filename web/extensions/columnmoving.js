@@ -50,7 +50,9 @@ export default {
                         startconfig = $.extend([], grid.options.columns);
                         wasOutOfBounds = false;
                         columnMoved = false;
-                    }).on("columndragmove", function (event, ui) {
+                    });
+
+                    grid.on("columndragmove", function (event, ui) {
                         if (event.outOfViewPort) {
                             if (!wasOutOfBounds) {
                                 wasOutOfBounds = true;
@@ -80,7 +82,9 @@ export default {
                                 storeColumnOrder(grid);
                             }
                         }
-                    }).on("columndragend", function (event, ui) {
+                    });
+
+                    grid.on("columndragend", function (event, ui) {
                         startconfig = null;
 
                         // don't call adjustColumnPositions unless the column was actually moved

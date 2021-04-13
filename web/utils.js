@@ -84,7 +84,7 @@ function normalizeOptions(options) {
  * @class
  * @implements {EventSource}
  */
-function Evented() {
+export function Evented() {
     var handlers = {};
     /**
      * Registers an event handler. Use the 'cancel' function in the returned object to remove the event handler.
@@ -337,6 +337,23 @@ function overlap(a, b) {
     if (a.end <= b.begin) return false;
     if (a.begin >= b.end) return false;
     return true;
+}
+
+export function filterEvent(elementSelector, handler) {
+    return function(e) {
+        for (var target = e.target; target && target !== this; target = target.parentNode) {
+            if (target.matches(elementSelector)) {
+                handler.call(target, e);
+                break;
+            }
+        }
+    }
+}
+
+export function empty(node) {
+    while(node.firstChild) {
+        node.removeChild(node.firstChild);
+    }
 }
 
 export default {

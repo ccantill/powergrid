@@ -1,5 +1,5 @@
 import override from "../override.js";
-import utils from "../utils.js";
+import utils, {filterEvent} from "../utils.js";
 
 export default function (grid, pluginOptions) {
     override(grid, function ($super) {
@@ -46,7 +46,7 @@ export default function (grid, pluginOptions) {
                 $super.init();
 
                 if (pluginOptions.editOnClick !== false) {
-                    this.container.on("click", ".pg-cell.pg-editable:not(.pg-editing)", function (event) {
+                    this.container.addEventListener("click", filterEvent(".pg-cell.pg-editable:not(.pg-editing)", function (event) {
                         var targetCell = event.target;
                         while (targetCell && !$(targetCell).is('.pg-cell')) {
                             targetCell = targetCell.parentNode;
@@ -58,11 +58,11 @@ export default function (grid, pluginOptions) {
                         var record = grid.dataSource.getRecordById(rowId);
 
                         grid.editing.startEdit(targetCell, key, record, rowIdx);
-                    });
+                    }));
                 }
 
                 if (pluginOptions.mode === 'row') {
-                    this.container.on("click", "[pg-role]", function (event) {
+                    this.container.addEventListener("click", filterEvent("[pg-role]", function (event) {
                         var target = $(event.target);
                         if (!target.is("[pg-role]")) {
                             target = target.parents("[pg-role]").first();
@@ -83,7 +83,7 @@ export default function (grid, pluginOptions) {
                                 grid.editing.abortRowEdit(record, rowIdx);
                                 break;
                         }
-                    });
+                    }));
                 }
 
                 this.dataSource.on('editabilitychanged', function (attr) {

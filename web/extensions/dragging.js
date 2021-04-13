@@ -1,5 +1,5 @@
 import override from "../override.js";
-import utils from "../utils.js";
+import utils, {filterEvent} from "../utils.js";
 
 export default {
     loadFirst: ['filtering'],
@@ -162,17 +162,15 @@ export default {
                         key = null;
                     }
 
-                    this.container
-                        .on("mousedown", ".pg-columnheader", startDrag)
-                        .on("click", ".pg-columnheader", endDrag);
+                    this.container.addEventListener("mousedown", filterEvent(".pg-columnheader", startDrag));
+                    this.container.addEventListener("click", filterEvent(".pg-columnheader", endDrag));
 
-                    $(window)
-                        .on("mousemove." + this.id, doDrag)
-                        .on("mouseup." + this.id, endDrag);
+                    window.addEventListener("mousemove", doDrag);
+                    window.addEventListener("mouseup", endDrag);
                 },
 
                 destroy: function () {
-                    $(window).off("mousemove." + this.id).off("mouseup." + this.id);
+                    // $(window).off("mousemove." + this.id).off("mouseup." + this.id); // FIXME
                     $super.destroy();
                 },
 

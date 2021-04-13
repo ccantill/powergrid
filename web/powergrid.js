@@ -1,5 +1,5 @@
 import vein from "./vein.js";
-import utils from "./utils.js";
+import utils, {createElement, empty, Evented} from "./utils.js";
 import translations from "./translations.js";
 
 /**
@@ -41,17 +41,23 @@ const debug = true;
 
 function determineScrollBarSize() {
     // Creates a dummy div just to measure the scrollbar sizes, then deletes it when it's no longer necessary.
-    const dummy = $("<div style='overflow: scroll; width: 100px; height: 100px; visibility: hidden; opacity: 0'></div>");
-    const filler = $("<div style='width:100%; height: 100%;'></div>");
-    dummy.append(filler);
-    $('body').append(dummy);
+    const filler = utils.createElement("div", {
+        style: "width:100%; height: 100%;"
+    })
+    const dummy = utils.createElement("div", {
+            style: "overflow: scroll; width: 100px; height: 100px; visibility: hidden; opacity: 0"
+        },
+        [
+            filler
+        ]);
+    document.body.appendChild(dummy);
 
     const size = {
-        height: dummy.height() - filler.height(),
-        width: dummy.width() - filler.width()
-    };
+        height: dummy.offsetHeight - filler.offsetHeight,
+        width: dummy.offsetWidth - filler.offsetWidth
+    }
 
-    dummy.remove();
+    document.body.removeChild(dummy);
 
     return size;
 }
@@ -66,8 +72,8 @@ if (vein) {
 
 function elementWithClasses(tagname, classes) {
     const el = document.createElement(tagname);
-    if(classes) {
-        el.className=classes;
+    if (classes) {
+        el.className = classes;
     }
     return el;
 }
@@ -83,17 +89,16 @@ function nonFalse(e) {
  * @param {PowerGridOptions} options - the options to use in the grid
  * @constructor
  */
-class PowerGrid {
+class PowerGrid extends Evented {
 
     constructor(target, options) {
-        this.options = options;
+        super();
+        this.options = {
+            ...defaultOptions,
+            ...options,
+            columns: this.applyColumnDefaults(options.columns)
+        };
         this.target = target;
-
-        for (let x in defaultOptions) {
-            if (this.options[x] === undefined) {
-                this.options[x] = defaultOptions[x];
-            }
-        }
 
         this.dataSource = options.dataSource;
 
@@ -103,11 +108,7 @@ class PowerGrid {
             this.beginInit(resolve);
         });
 
-        this.id = target.attr('id');
-
-        $(target).on('remove', () => {
-            this.destroy();
-        });
+        this.id = target.getAttribute('id');
     }
 
     /**
@@ -118,52 +119,45 @@ class PowerGrid {
         return this.promise.then(callback);
     }
 
+    applyColumnDefaults(columns) {
+        return columns.map((column, index) => ({
+            ...columnDefaults,
+            key: index,
+            ...column
+        }));
+    }
+
     /**
      * Begins the initialisation of the grid and invokes the given callback when ready
      * @private
      * @param callback
      */
     beginInit(callback) {
-        const grid = this;
-
-        // set column defaults
-        this.options.columns.forEach((column, index) => {
-            if(column.key === undefined) {
-                column.key = index;
-            }
-
-            for(let i in columnDefaults) {
-                if(!(i in column)) {
-                    column[i] = columnDefaults[i];
-                }
-            }
-        });
-
-        if(this.options.extensions) {
+        if (this.options.extensions) {
             this.loadExtensions((pluginList, plugins) => {
-                pluginList = grid.sortByLoadOrder(pluginList, plugins);
+                pluginList = this.sortByLoadOrder(pluginList, plugins);
 
                 pluginList.forEach(key => {
                     console.info("Initing extension " + key);
                     const p = plugins[key];
                     try {
                         if (typeof p === 'function') {
-                            p(grid, grid.options.extensions[key]);
+                            p(this, this.options.extensions[key]);
                         } else if (typeof p.init === 'function') {
-                            p.init(grid, grid.options.extensions[key]);
+                            p.init(this, this.options.extensions[key]);
                         }
-                    } catch(e) {
+                    } catch (e) {
                         console.error("Error initializing extension " + key);
                         console.error(e);
                         throw e;
                     }
                 });
 
-                grid.init();
+                this.init();
                 callback();
             });
         } else {
-            grid.init();
+            this.init();
             callback();
         }
     }
@@ -178,8 +172,8 @@ class PowerGrid {
      */
     async loadExtensions(callback, keys, plugins, pluginList) {
         const grid = this;
-        if(arguments.length < 4) {
-            keys = Object.keys(this.options.extensions),
+        if (arguments.length < 4) {
+            keys = Object.keys(this.options.extensions);
             plugins = {};
             pluginList = [];
         }
@@ -197,12 +191,12 @@ class PowerGrid {
 
             const reqs = plugin.requires;
             if (reqs) {
-                for(let req in reqs) {
-                    if(!grid.options.extensions[req]) {
+                for (let req in reqs) {
+                    if (!grid.options.extensions[req]) {
                         newkeys.push(req);
                     }
 
-                    if(!grid.options.extensions[req] || grid.options.extensions[req] === true) {
+                    if (!grid.options.extensions[req] || grid.options.extensions[req] === true) {
                         grid.options.extensions[req] = reqs[req];
                     } else {
                         $.extend(true, grid.options.extensions[req], reqs[req]);
@@ -211,7 +205,7 @@ class PowerGrid {
             }
         }
 
-        if(newkeys.length) {
+        if (newkeys.length) {
             await grid.loadExtensions(callback, newkeys, plugins, pluginList);
         } else {
             callback(pluginList, plugins);
@@ -222,8 +216,8 @@ class PowerGrid {
         const sorted = [], added = {};
 
         function add(key) {
-            if(plugins[key] !== undefined && added[key] === undefined) {
-                if(plugins[key].loadFirst) {
+            if (plugins[key] !== undefined && added[key] === undefined) {
+                if (plugins[key].loadFirst) {
                     plugins[key].loadFirst.forEach(add);
                 }
                 sorted.push(key);
@@ -236,15 +230,15 @@ class PowerGrid {
         return sorted;
     }
 
-    initLoadingIndicator () {
-        $(this.target).addClass('pg-loading');
+    initLoadingIndicator() {
+        this.target.classList.add("pg-loading");
     }
 
-    elementId () {
-        let id = this.target.attr('id');
-        if(!id) {
-            id = "powergrid-"+ (sequence++);
-            this.target.attr('id', id);
+    elementId() {
+        let id = this.target.getAttribute('id');
+        if (!id) {
+            id = "powergrid-" + (sequence++);
+            this.target.setAttribute('id', id);
         }
         return id;
     }
@@ -254,122 +248,126 @@ class PowerGrid {
      * @private
      */
     init() {
-        const grid = this;
-        const baseSelector = this.baseSelector = "#" + this.elementId(),
-            container = this.container = $("<div class='powergrid'>"),
-            columnheadercontainer = this.columnheadercontainer = $("<div class='pg-columnheaders'>"),
-            headercontainer = this.headercontainer = this.options.frozenRowsTop && $("<div class='pg-rowgroup pg-header'>") || undefined,
-            scrollingcontainer = this.scrollingcontainer = $("<div class='pg-rowgroup pg-scrolling'>"),
-            footercontainer = this.footercontainer = this.options.frozenRowsBottom && $("<div class='pg-rowgroup pg-footer'>") || undefined,
-            scroller = this.scroller = $("<div class='pg-scroller'>"),
-            scrollFiller = this.scrollFiller = $("<div class='pg-scroller-filler'>"),
+        const self = this;
+        this.baseSelector = "#" + this.elementId();
+        const container = this.container = createElement("div", {class: "powergrid"});
+        const columnheadercontainer = this.columnheadercontainer = createElement("div", {class: "pg-columnheaders"});
+        const headercontainer = this.headercontainer = this.options.frozenRowsTop ? createElement("div", {class: "pg-rowgroup pg-header"}) : undefined;
+        const scrollingcontainer = this.scrollingcontainer = createElement("div", {class: 'pg-rowgroup pg-scrolling'});
+        const footercontainer = this.footercontainer = this.options.frozenRowsBottom ? createElement("div", {class: 'pg-rowgroup pg-footer'}) : undefined;
+        const scroller = this.scroller = createElement("div", {class: 'pg-scroller'});
+        const scrollFiller = this.scrollFiller = createElement("div", {class: 'pg-scroller-filler'});
 
-            scrollContainers = this.scrollContainers = ($().add(scrollingcontainer).add(headercontainer).add(footercontainer));
-
-        if(this.options.fullWidth) {
-            container.addClass("pg-full-width");
+        if (this.options.fullWidth) {
+            container.classList.add("pg-full-width");
         }
 
-        if(this.options.autoResize) {
-            container.addClass("pg-autoresize");
+        if (this.options.autoResize) {
+            container.classList.add("pg-autoresize");
         }
 
         const hiddenColumns = this.loadSetting("hidden");
-        if(hiddenColumns) {
+        if (hiddenColumns) {
             this._hideColumns(hiddenColumns);
         }
 
-        this.fixedLeft = this.fixedRight = this.middleScrollers = $();
+        this.fixedLeft = [];
+        this.fixedRight = [];
+        this.middleScrollers = [];
 
         this.columnheadergroup = this.createRowGroup(columnheadercontainer);
         this.headergroup = headercontainer && this.createRowGroup(headercontainer);
-        this.scrollinggroup = this.createRowGroup(scrollingcontainer, false);
+        this.scrollinggroup = this.createRowGroup(scrollingcontainer);
         this.footergroup = footercontainer && this.createRowGroup(footercontainer);
 
         this.renderColumnHeaderContents(this.columnheadergroup);
 
-        container.append(scroller.append(scrollFiller)).append(scrollingcontainer).append(columnheadercontainer).append(headercontainer).append(footercontainer);
+        container.appendChild(scroller).appendChild(scrollFiller);
+        container.appendChild(scrollingcontainer);
+        container.appendChild(columnheadercontainer);
+        container.appendChild(headercontainer);
+        container.appendChild(footercontainer);
 
         this.queueAdjustColumnPositions();
 
-        $(this.target).append(container);
+        this.target.appendChild(container);
 
-        scroller.on('scroll', function(evt) {
-            grid.syncScroll(this, evt);
+        scroller.addEventListener('scroll', function (evt) {
+            self.syncScroll(this, evt);
         });
 
-        if(this.dataSource.isReady()) {
-            if(!grid.isInited) {
-                grid.isInited = true;
-                grid.trigger('inited', grid);
+        if (this.dataSource.isReady()) {
+            if (!this.isInited) {
+                this.isInited = true;
+                this.trigger('inited', this);
             }
 
-            grid.resetDataSubscriptions();
+            this.resetDataSubscriptions();
 
-            grid.trigger('dataloaded');
+            this.trigger('dataloaded');
             utils.inAnimationFrame(() => {
-                grid.renderData();
-                grid.trigger('viewchanged');
-                $(grid.target).removeClass('pg-loading');
+                this.renderData();
+                this.trigger('viewchanged');
+                this.target.classList.remove("pg-loading");
             });
         } else {
             this.initLoadingIndicator();
         }
 
         this.dataSource.on("dataloaded", data => {
-            if(!grid.isInited) {
-                grid.isInited = true;
-                grid.trigger('inited', grid);
+            if (!this.isInited) {
+                this.isInited = true;
+                this.trigger('inited', this);
             }
 
-            grid.resetDataSubscriptions();
+            this.resetDataSubscriptions();
 
-            grid.trigger('dataloaded', data);
+            this.trigger('dataloaded', data);
             utils.inAnimationFrame(() => {
-                grid.renderData();
+                this.renderData();
 
-                grid.queueAfterRender(() => {
-                    grid.trigger('viewchanged');
-                    $(grid.target).removeClass('pg-loading');
+                this.queueAfterRender(() => {
+                    this.trigger('viewchanged');
+                    this.target.classList.remove("pg-loading");
                 });
             });
         });
 
         this.dataSource.on("rowsremoved", data => {
-            grid._removeRows(data.start, data.end);
+            this._removeRows(data.start, data.end);
 
-            grid.queueUpdateViewport();
-            grid.queueAdjustHeights();
-            grid.queueAfterRender(() => {
-                grid.trigger('rowsremoved', data);
-                grid.trigger('viewchanged');
+            this.queueUpdateViewport();
+            this.queueAdjustHeights();
+            this.queueAfterRender(() => {
+                this.trigger('rowsremoved', data);
+                this.trigger('viewchanged');
             });
         });
 
         this.dataSource.on("rowsadded", data => {
-            grid._addRows(data.start, data.end);
+            this._addRows(data.start, data.end);
 
-            grid.queueUpdateViewport();
-            grid.queueAdjustHeights();
+            this.queueUpdateViewport();
+            this.queueAdjustHeights();
 
-            grid.queueAfterRender(() => {
-                grid.trigger('rowsadded', data);
-                grid.trigger('viewchanged');
+            this.queueAfterRender(() => {
+                this.trigger('rowsadded', data);
+                this.trigger('viewchanged');
             });
         });
 
         this.dataSource.on("datachanged", data => {
             utils.inAnimationFrame(() => {
-                if(data.values) {
-                    grid.updateCellValues(data.values);
-                    grid.trigger('change');
+                if (data.values) {
+                    this.updateCellValues(data.values);
+                    this.trigger('change');
                 }
-                if(data.rows) {
-                    grid.updateRows(data.rows);
-                    grid.trigger('change');
+                if (data.rows) {
+                    this.updateRows(data.rows);
+                    this.trigger('change');
                 }
-                grid.trigger('datachanged', data);
-                grid.trigger('viewchanged');
+                this.trigger('datachanged', data);
+                this.trigger('viewchanged');
             });
         });
 
@@ -383,7 +381,7 @@ class PowerGrid {
      * @param {function} callback - The callback to invoke.
      */
     ready(callback) {
-        if(this.isInited) callback.apply(this, [this]);
+        if (this.isInited) callback.apply(this, [this]);
         else this.on('inited', callback.bind(this, this));
     }
 
@@ -400,17 +398,24 @@ class PowerGrid {
      */
     initScrollEvents() {
         const self = this;
-        this.target.on("wheel", evt => {
-            const dX = evt.originalEvent.deltaX, dY = evt.originalEvent.deltaY,
-                dM = evt.originalEvent.deltaMode;
+        this.target.addEventListener("mousewheel", evt => {
+            const dX = evt.deltaX, dY = evt.deltaY,
+                dM = evt.deltaMode;
             let ddX, ddY;
-            switch(dM) {
-                case 0: ddX=ddY=1; break;
-                case 1: ddX=ddY=self.rowHeight(0); break;
-                case 2: ddX=self.pageHeight(); ddY=self.pageWidth(); break;
+            switch (dM) {
+                case 0:
+                    ddX = ddY = 1;
+                    break;
+                case 1:
+                    ddX = ddY = self.rowHeight(0);
+                    break;
+                case 2:
+                    ddX = self.pageHeight();
+                    ddY = self.pageWidth();
+                    break;
             }
 
-            if(self.scrollBy(dX * ddX, dY * ddY)) {
+            if (self.scrollBy(dX * ddX, dY * ddY)) {
                 evt.preventDefault();
             }
         });
@@ -438,8 +443,8 @@ class PowerGrid {
         function pruneEventQueue() {
             // remove all eventQueue entries older than <timeUnit> milliseconds
             const t = eventQueue[0].t;
-            for(var x=1,l=eventQueue.length;x<l;x++) {
-                if( (t - eventQueue[x].t) > timeUnit ) break;
+            for (var x = 1, l = eventQueue.length; x < l; x++) {
+                if ((t - eventQueue[x].t) > timeUnit) break;
             }
             eventQueue = eventQueue.slice(0, x);
         }
@@ -450,7 +455,7 @@ class PowerGrid {
             const scrollPosition = self.getScrollPosition();
 
             function draw() {
-                if(tracking) return; // if tracking a new touch thing, stop inertial scrolling
+                if (tracking) return; // if tracking a new touch thing, stop inertial scrolling
 
                 const t = new Date().getTime();
                 const frameDuration = t - previousTime;
@@ -460,7 +465,7 @@ class PowerGrid {
                 speedX = speedX * r; // adjust speed according to drag
                 speedY = speedY * r;
 
-                if(Math.abs(speedX) >= inertialCutOff && Math.abs(speedY) >= inertialCutOff) {
+                if (Math.abs(speedX) >= inertialCutOff && Math.abs(speedY) >= inertialCutOff) {
                     // not doing relative scrolling because that looses a lot of precision
                     scrollPosition.left += speedX * frameDuration;
                     scrollPosition.top += speedY * frameDuration;
@@ -469,19 +474,21 @@ class PowerGrid {
                     // request next frame.
                     requestAnimationFrame(draw);
                 }
-            };
+            }
 
             utils.inAnimationFrame(draw);
         }
 
-        this.target.on("touchstart", startevent => {
+        this.target.addEventListener("touchstart", startevent => {
             // user touches screen, so we may have to start scrolling
             tracking = true;
-            lastX = startevent.originalEvent.touches[0].pageX, lastY = startevent.originalEvent.touches[0].pageY;
-        }).on("touchmove", dragevent => {
-            if(tracking) { // probably a pointless test since we shouldn't be getting a touchmove event unless we got a touchstart first anyway, but still
-                const newX = dragevent.originalEvent.touches[0].pageX,
-                    newY = dragevent.originalEvent.touches[0].pageY;
+            lastX = startevent.touches[0].pageX, lastY = startevent.touches[0].pageY;
+        });
+
+        this.target.addEventListener("touchmove", dragevent => {
+            if (tracking) { // probably a pointless test since we shouldn't be getting a touchmove event unless we got a touchstart first anyway, but still
+                const newX = dragevent.touches[0].pageX,
+                    newY = dragevent.touches[0].pageY;
 
                 const dX = lastX - newX, dY = lastY - newY;
 
@@ -501,13 +508,15 @@ class PowerGrid {
 
                 dragevent.preventDefault();
             }
-        }).on("touchend", endevent => {
+        });
+
+        this.target.addEventListener("touchend", endevent => {
             tracking = false;
 
-            if(!eventQueue.length) return;
+            if (!eventQueue.length) return;
 
             const timeSinceLastEvent = (new Date().getTime()) - eventQueue[0].t;
-            if(timeSinceLastEvent < timeUnit) {
+            if (timeSinceLastEvent < timeUnit) {
                 const delta = eventQueue.reduce((a, b) => {
                     a.dX += b.x;
                     a.dY += b.y;
@@ -530,20 +539,22 @@ class PowerGrid {
      * @returns {{left: boolean|*|jQuery|HTMLElement, scrolling: *|jQuery|HTMLElement, right: boolean|*|jQuery|HTMLElement, all: *|jQuery|HTMLElement}}
      */
     createRowGroup(container) {
-        const fixedPartLeft = this.options.frozenColumnsLeft > 0 && $("<div class='pg-container pg-fixed pg-left'>");
-        const fixedPartRight = this.options.frozenColumnsRight > 0 && $("<div class='pg-container pg-fixed pg-right'>");
-        const scrollingPart = $("<div class='pg-container pg-scrolling'>");
+        const fixedPartLeft = this.options.frozenColumnsLeft > 0 && createElement("div", {class: 'pg-container pg-fixed pg-left'});
+        const fixedPartRight = this.options.frozenColumnsRight > 0 && createElement("div", {class: 'pg-container pg-fixed pg-right'});
+        const scrollingPart = createElement("div", {class: 'pg-container pg-scrolling'});
 
-        this.fixedLeft = this.fixedLeft.add(fixedPartLeft);
-        this.fixedRight = this.fixedRight.add(fixedPartRight);
-        this.middleScrollers = this.middleScrollers.add(scrollingPart);
+        this.fixedLeft = this.fixedLeft.concat([fixedPartLeft]);
+        this.fixedRight = this.fixedRight.concat([fixedPartRight]);
+        this.middleScrollers = this.middleScrollers.concat([scrollingPart]);
 
-        let all = $();
-        if(fixedPartLeft) all = all.add(fixedPartLeft);
-        if(scrollingPart) all = all.add(scrollingPart);
-        if(fixedPartRight) all = all.add(fixedPartRight);
+        let all = [];
+        if (fixedPartLeft) all = all.concat(fixedPartLeft);
+        if (scrollingPart) all = all.concat(scrollingPart);
+        if (fixedPartRight) all = all.concat(fixedPartRight);
 
-        container.append(scrollingPart).append(fixedPartLeft).append(fixedPartRight);
+        container.appendChild(scrollingPart);
+        container.appendChild(fixedPartLeft);
+        container.appendChild(fixedPartRight);
 
         return {
             left: fixedPartLeft,
@@ -559,7 +570,7 @@ class PowerGrid {
      * in the dataSubscriptions SubscriptionQueue.
      */
     resetDataSubscriptions() {
-        if(this.dataSubscriptions) {
+        if (this.dataSubscriptions) {
             this.dataSubscriptions.cancel();
         }
         this.dataSubscriptions = new utils.SubscriptionQueue();
@@ -573,8 +584,8 @@ class PowerGrid {
         const self = this;
 
         const recordCount = Promise.resolve(this.dataSource.recordCount()).then(this.dataSubscriptions.queue(recordCount => {
-            self.headergroup && self.headergroup.all.empty();
-            self.footergroup && self.footergroup.all.empty();
+            self.headergroup && self.headergroup.all.forEach(empty);
+            self.footergroup && self.footergroup.all.forEach(empty);
 
             self.recordCount = recordCount;
 
@@ -629,7 +640,7 @@ class PowerGrid {
      * @returns {number}
      */
     getRecordCount() {
-        if(this.recordCount === undefined) {
+        if (this.recordCount === undefined) {
             throw "Record count currently unknown."
         }
         return this.recordCount;
@@ -646,10 +657,10 @@ class PowerGrid {
         const data = this.dataSource.getData(start, end);
 
         let workingDataSubset;
-        if(start !==undefined) {
+        if (start !== undefined) {
             workingDataSubset = new Array((end || this.getRecordCount()) - start);
-            for(var x = start; x < end; x++) {
-                workingDataSubset[x-start] = self.workingSet[x] = {};
+            for (var x = start; x < end; x++) {
+                workingDataSubset[x - start] = self.workingSet[x] = {};
             }
         }
 
@@ -696,31 +707,31 @@ class PowerGrid {
      * @param rowgroup
      */
     renderColumnHeaderContents(rowgroup) {
-        const rowFixedPartLeft = rowgroup.left && $("<div class='pg-row pg-fixed'>"),
-            rowScrollingPart = rowgroup.scrolling && $("<div class='pg-row pg-scrolling'>"),
-            rowFixedPartRight = rowgroup.right && $("<div class='pg-row pg-fixed'>");
-        let rowParts = $();
+        const rowFixedPartLeft = rowgroup.left && createElement("div", {class: 'pg-row pg-fixed'}),
+            rowScrollingPart = rowgroup.scrolling && createElement("div", {class: 'pg-row pg-scrolling'}),
+            rowFixedPartRight = rowgroup.right && createElement("div", {class: 'pg-row pg-fixed'});
+        let rowParts = [];
 
-        if(rowgroup.left) rowgroup.left.append(rowFixedPartLeft);
-        if(rowgroup.scrolling) rowgroup.scrolling.append(rowScrollingPart);
-        if(rowgroup.right) rowgroup.right.append(rowFixedPartRight);
+        if (rowgroup.left) rowgroup.left.append(rowFixedPartLeft);
+        if (rowgroup.scrolling) rowgroup.scrolling.append(rowScrollingPart);
+        if (rowgroup.right) rowgroup.right.append(rowFixedPartRight);
 
-        if(rowFixedPartLeft) rowParts = rowParts.add(rowFixedPartLeft);
-        if(rowScrollingPart) rowParts = rowParts.add(rowScrollingPart);
-        if(rowFixedPartRight) rowParts = rowParts.add(rowFixedPartRight);
+        if (rowFixedPartLeft) rowParts = rowParts.concat(rowFixedPartLeft);
+        if (rowScrollingPart) rowParts = rowParts.concat(rowScrollingPart);
+        if (rowFixedPartRight) rowParts = rowParts.concat(rowFixedPartRight);
 
         const columns = this.getVisibleColumns();
-        for(let y = 0; y < columns.length; y++) {
+        for (let y = 0; y < columns.length; y++) {
             let cell;
             const column = columns[y];
             cell = this.renderHeaderCell(column, y);
 
-            cell.addClass("pg-column" + this.normalizeCssClass(column.key));
-            cell.attr("data-column-key", column.key);
+            cell.classList.add("pg-column" + this.normalizeCssClass(column.key));
+            cell.setAttribute("data-column-key", column.key);
 
-            if(y < this.options.frozenColumnsLeft) {
+            if (y < this.options.frozenColumnsLeft) {
                 rowFixedPartLeft.append(cell);
-            } else if(y > columns.length - this.options.frozenColumnsRight - 1) {
+            } else if (y > columns.length - this.options.frozenColumnsRight - 1) {
                 rowFixedPartRight.append(cell);
             } else {
                 rowScrollingPart.append(cell);
@@ -750,7 +761,7 @@ class PowerGrid {
     renderRowGroupContents(start, end, rowgroup, prepend, atIndex) {
         const self = this;
 
-        if(atIndex == -1 && !prepend) {
+        if (atIndex == -1 && !prepend) {
             // we're inserting a row after -1, so basically prepend before anything else
             atIndex = undefined;
             prepend = true;
@@ -760,14 +771,14 @@ class PowerGrid {
 
         let targetLeft, targetMiddle, targetRight;
 
-        if(atIndex === undefined) {
+        if (atIndex === undefined) {
             targetLeft = rowgroup.left;
             targetMiddle = rowgroup.scrolling;
             targetRight = rowgroup.right;
         } else {
-            targetLeft = rowgroup.left && rowgroup.left.children(".pg-row:eq(" + atIndex + ")");
-            targetMiddle = rowgroup.scrolling && rowgroup.scrolling.children(".pg-row:eq(" + atIndex + ")");
-            targetRight = rowgroup.right && rowgroup.right.children(".pg-row:eq(" + atIndex + ")");
+            targetLeft = rowgroup.left && rowgroup.left.querySelectorAll(":scope > .pg-row:eq(" + atIndex + ")");
+            targetMiddle = rowgroup.scrolling && rowgroup.scrolling.querySelectorAll(":scope > .pg-row:eq(" + atIndex + ")");
+            targetRight = rowgroup.right && rowgroup.right.querySelectorAll(":scope > .pg-row:eq(" + atIndex + ")");
         }
 
         const fragmentLeft = targetLeft && document.createDocumentFragment(),
@@ -777,7 +788,7 @@ class PowerGrid {
         const dataSubset = this.getData(start < 0 ? 0 : start, end);
         const rows = new Array(end - start);
 
-        for(var x = start; x < end; x++) {
+        for (var x = start; x < end; x++) {
             var rowFixedPartLeft = targetLeft && this.rowGroupTemplates.fixed.cloneNode();
             var rowScrollingPart = targetMiddle && this.rowGroupTemplates.scrolling.cloneNode();
             var rowFixedPartRight = targetRight && this.rowGroupTemplates.fixed.cloneNode();
@@ -794,15 +805,15 @@ class PowerGrid {
                 e.style.height = self.rowHeight(x) + "px";
             });
 
-            if(fragmentLeft)   fragmentLeft.appendChild(rowFixedPartLeft);
-            if(fragmentMiddle) fragmentMiddle.appendChild(rowScrollingPart);
-            if(fragmentRight)  fragmentRight.appendChild(rowFixedPartRight);
+            if (fragmentLeft) fragmentLeft.appendChild(rowFixedPartLeft);
+            if (fragmentMiddle) fragmentMiddle.appendChild(rowScrollingPart);
+            if (fragmentRight) fragmentRight.appendChild(rowFixedPartRight);
         }
 
         function populateRows(dataSubset) {
             let x = (end <= self.options.frozenRowsTop || start >= self.recordCount - self.options.frozenRowsBottom) ? start : Math.max(start, self.viewport.begin);
             const vpEnd = (end <= self.options.frozenRowsTop || start >= self.recordCount - self.options.frozenRowsBottom) ? end : Math.min(end, self.viewport.end);
-            for(; x < vpEnd; x++) {
+            for (; x < vpEnd; x++) {
                 const record = dataSubset[x - start],
                     row = rows[x],
                     rowFixedPartLeft = row.rowFixedPartLeft,
@@ -829,9 +840,9 @@ class PowerGrid {
             });
         }
 
-        if(targetLeft) targetLeft[method](fragmentLeft);
-        if(targetMiddle) targetMiddle[method](fragmentMiddle);
-        if(targetRight) targetRight[method](fragmentRight);
+        if (targetLeft) targetLeft[method](fragmentLeft);
+        if (targetMiddle) targetMiddle[method](fragmentMiddle);
+        if (targetRight) targetRight[method](fragmentRight);
     }
 
     /**
@@ -845,7 +856,7 @@ class PowerGrid {
      */
     renderRowToParts(record, rowIdx, rowFixedPartLeft, rowScrollingPart, rowFixedPartRight) {
         const columns = this.getVisibleColumns();
-        for(let y = 0; y < columns.length; y++) {
+        for (let y = 0; y < columns.length; y++) {
             let cell;
             const column = columns[y];
             cell = this.renderCell(record, column, rowIdx, y);
@@ -854,9 +865,9 @@ class PowerGrid {
             cell.className += " pg-column" + this.normalizeCssClass(column.key);
             cell.setAttribute("data-column-key", column.key);
 
-            if(y < this.options.frozenColumnsLeft) {
+            if (y < this.options.frozenColumnsLeft) {
                 rowFixedPartLeft.appendChild(cell);
-            } else if(y > columns.length - this.options.frozenColumnsRight - 1) {
+            } else if (y > columns.length - this.options.frozenColumnsRight - 1) {
                 rowFixedPartRight.appendChild(cell);
             } else {
                 rowScrollingPart.appendChild(cell);
@@ -880,7 +891,7 @@ class PowerGrid {
      * @private
      */
     _removeRows(start, end) {
-        if(end > this.recordCount || end < start) {
+        if (end > this.recordCount || end < start) {
             throw "Index mismatch";
         }
         this.recordCount -= end - start;
@@ -904,38 +915,40 @@ class PowerGrid {
             // find pg-row elements to remove. as gt and lt work within the result, first do 'lt' as 'gt' affect indeces
             // first build a selector
             let selector = ".pg-row";
-            if (end < this.viewport.end) {
-                selector += ":lt(" + (end - this.viewport.begin) + ")";
-            }
-            if (start > this.viewport.begin) {
-                selector += ":gt(" + (start - this.viewport.begin - 1) + ")";
-            }
             // then query all row containers with that selector
-            this.scrollingcontainer.children(".pg-container").each((i, part) => {
+            this.scrollingcontainer.querySelectorAll(":scope >.pg-container").forEach((part,i) => {
                 // and destroy the found row elements
-                const children = $(part).children(selector);
-                if(children.length != Math.min(end, self.viewport.end) - Math.max(start, self.viewport.begin)) {
+                let children = part.querySelectorAll(":scope > " + selector);
+
+                if (end < this.viewport.end) {
+                    children = children.slice(0, end - this.viewport.begin);
+                }
+                if (start > this.viewport.begin) {
+                    children = children.slice(start - this.viewport);
+                }
+
+                if (children.length !== Math.min(end, self.viewport.end) - Math.max(start, self.viewport.begin)) {
                     debugger;
                 }
                 self.destroyRows(children);
             });
 
-            if(end < this.viewport.end) {
+            if (end < this.viewport.end) {
                 // adjust the index attributes of the remaining rendered rows after the deleted block.
                 this._incrementRowIndexes(start, start - end);
             }
 
-            if(start < this.viewport.begin) {
+            if (start < this.viewport.begin) {
                 // deleted block covers start of viewport
                 this.viewport.begin = start;
             }
 
             // the effective viewport will have shrunk, so adjust it
-            if(end >= this.viewport.end) {
+            if (end >= this.viewport.end) {
                 this.viewport.end = Math.max(start, this.viewport.begin);
                 if (debug) this.verify();
             } else {
-                this.viewport.end -= end-start;
+                this.viewport.end -= end - start;
                 if (debug) this.verify();
             }
         } else {
@@ -958,7 +971,7 @@ class PowerGrid {
             range = this.rowsInView(sPos.top, sPos.top + sArea.height, start, end);
 
         const begin = Math.max(start, range.begin - this.options.virtualScrollingExcess);
-        range.begin = begin - (begin%2); // maintain odd/even-ness of rows for styling purposes
+        range.begin = begin - (begin % 2); // maintain odd/even-ness of rows for styling purposes
         range.end = Math.min(end, range.end + this.options.virtualScrollingExcess);
 
         return range;
@@ -978,11 +991,11 @@ class PowerGrid {
         let newScrollTop = sPos.top;
         const newScrollLeft = sPos.left;
 
-        if( (!this.options.frozenRowsTop || rowIdx >= this.options.frozenRowsTop) &&
+        if ((!this.options.frozenRowsTop || rowIdx >= this.options.frozenRowsTop) &&
             (!this.options.frozenRowsBottom || rowIdx < this.getRecordCount() - this.options.frozenRowsBottom)) {
 
             // row is in scrolling part
-            if(rowIdx <= range.begin || rowIdx >= range.end) {
+            if (rowIdx <= range.begin || rowIdx >= range.end) {
                 // row is outside viewport. we gotta scroll.
                 newScrollTop = Math.max(0, this.rowHeight(start, rowIdx) - sArea.height / 2);
             }
@@ -996,7 +1009,7 @@ class PowerGrid {
      * @param {boolean} renderData - true if the data should be rendered as well.
      */
     updateColumns(renderData) {
-        if(renderData !== false) {
+        if (renderData !== false) {
             this.renderData();
         }
         this.columnheadergroup.all.empty();
@@ -1052,7 +1065,7 @@ class PowerGrid {
     _incrementRowIndexes(start, offset) {
         this.container.find("> .pg-rowgroup > .pg-container > .pg-row").each((idx, row) => {
             var idx = parseInt(row.getAttribute('data-row-idx'));
-            if(idx >= start) {
+            if (idx >= start) {
                 row.setAttribute('data-row-idx', idx + offset);
             }
         });
@@ -1065,7 +1078,7 @@ class PowerGrid {
      * @private
      */
     _addRows(start, end) {
-        if(start > this.recordCount) {
+        if (start > this.recordCount) {
             throw "Index mismatch";
         }
 
@@ -1099,12 +1112,12 @@ class PowerGrid {
                 const startIndexForDeletion = renderStart - this.viewport.begin;
                 const self = this;
                 let selector = ".pg-row";
-                if(startIndexForDeletion > 0) {
+                if (startIndexForDeletion > 0) {
                     selector += ":gt(" + (startIndexForDeletion - 1) + ")";
                 }
                 this.scrollinggroup.all.each((i, part) => {
-                    const rows = $(part).children(selector);
-                    if(debug && rows.length != self.viewport.end - renderStart) {
+                    const rows = part.querySelectorAll(":scope " + selector);
+                    if (debug && rows.length != self.viewport.end - renderStart) {
                         // our selector is returning more rows than we're expecting
                         debugger;
                     }
@@ -1118,7 +1131,7 @@ class PowerGrid {
             this._incrementRowIndexes(start, end - start);
             this.viewport.end += renderCount;
 
-            if(renderEnd == this.viewport.end) { // if this block of data comes right at the end of the viewport
+            if (renderEnd == this.viewport.end) { // if this block of data comes right at the end of the viewport
                 // append rows to the end
                 this.renderRowGroupContents(renderStart, renderEnd, this.scrollinggroup, false);
             } else {
@@ -1163,9 +1176,9 @@ class PowerGrid {
         // next available timeslot, and adds the excess rows. This is to ensure that the time before the user sees
         // the updated viewport is as short as possible, and the user does not have to wait for rows to render
         // that he's not going to see anyway.
-        if(!renderExcess) {
+        if (!renderExcess) {
             // First pass, render as little as possible.
-            if(utils.overlap(this.viewport, rowsInViewWithExcess)) {
+            if (utils.overlap(this.viewport, rowsInViewWithExcess)) {
                 // the target viewport is adjacent to the current one, so we'll take the union of the current
                 // viewport with what is going to be visible to the user. That means no rows are being removed
                 // from the DOM just yet, only rows are being added (either rows that are going to be visible,
@@ -1185,13 +1198,13 @@ class PowerGrid {
 
         this.setViewport(range);
 
-        if(!renderExcess) {
+        if (!renderExcess) {
             (window.clearImmediate) && window.clearImmediate(this._updateViewportImmediate);
             this._updateViewportImmediate = (window.setImmediate || requestAnimationFrame)(this.updateViewportImmediate.bind(this, true));
         }
     }
 
-    updateViewport = utils.debounce(function() {
+    updateViewport = utils.debounce(function () {
         requestAnimationFrame(this.updateViewportImmediate.bind(this));
     }, 100)
 
@@ -1209,61 +1222,69 @@ class PowerGrid {
 
         this.viewport = range;
 
-        if(!this.previousViewport || range.begin != previousViewport.begin || range.end != previousViewport.end) {
+        if (!this.previousViewport || range.begin != previousViewport.begin || range.end != previousViewport.end) {
             const leadingHeight = this.rowHeight(start, range.begin),
                 trailingHeight = this.rowHeight(range.end, end);
 
-            if(utils.overlap(range, previousViewport)) {
-                if(range.begin < previousViewport.begin) {
+            if (utils.overlap(range, previousViewport)) {
+                if (range.begin < previousViewport.begin) {
                     // have to add rows to beginning
                     this.renderRowGroupContents(Math.max(start, range.begin), Math.min(range.end, previousViewport.begin), this.scrollinggroup, true);
-                } else if(range.begin > previousViewport.begin) {
+                } else if (range.begin > previousViewport.begin) {
                     // have to remove rows from beginning
-                    allParts.each((i, part) => {
-                        self.destroyRows($(part).children('.pg-row:lt(' + (range.begin - previousViewport.begin) + ')'));
+                    allParts.forEach((part) => {
+                        self.destroyRows(Array.from(part.querySelectorAll(':scope > .pg-row')).slice(0, range.begin - previousViewport.begin));
                     });
                 }
 
-                if(range.end < previousViewport.end && range.end > previousViewport.begin) {
+                if (range.end < previousViewport.end && range.end > previousViewport.begin) {
                     // have to remove rows from end
-                    allParts.each((i, part) => {
-                        self.destroyRows($(part).children('.pg-row:gt(' + (range.end - range.begin - 1) + ')'));
+                    allParts.forEach((part) => {
+                        self.destroyRows(Array.from(part.querySelectorAll(':scope > .pg-row')).slice(range.end - range.begin));
                     });
-                } else if(range.end > previousViewport.end) {
+                } else if (range.end > previousViewport.end) {
                     // have to add rows to end
                     this.renderRowGroupContents(Math.max(previousViewport.end, range.begin), Math.min(range.end, end), this.scrollinggroup, false);
                 }
             } else {
                 // no overlap, just clear the entire thing and rebuild
-                allParts.empty();
+                allParts.forEach(empty);
                 this.allRowsDisposed();
 
                 const scrollingStart = Math.max(start, range.begin);
                 const scrollingEnd = Math.min(range.end, end);
 
-                if(scrollingEnd > scrollingStart) {
+                if (scrollingEnd > scrollingStart) {
                     this.renderRowGroupContents(scrollingStart, scrollingEnd, this.scrollinggroup, false);
                 }
             }
 
-            allParts.css('padding-top', leadingHeight + 'px');
-            allParts.css('padding-bottom', trailingHeight + 'px');
+            allParts.forEach(e => {
+                e.style.paddingTop = leadingHeight + 'px';
+                e.style.paddingBottom = trailingHeight + 'px';
+            });
         }
 
         if (debug) this.verify();
     }
 
     _updateStyle(temporary, selector, style) {
-        if(temporary === true) {
-            $(selector).css(style);
+        if (temporary === true) {
+            this.target.querySelectorAll(selector).forEach(e => {
+                for(let x in style) {
+                    e.style[x] = style[x];
+                }
+            });
         } else {
-            if(temporary === false) {
-                // means we explicitely invoke this after temporary changes, so reset the temporary changes first
-                const reset = {};
-                Object.keys(style).forEach(key => { reset[key] = ""; });
-                $(selector).css(reset);
+            if (temporary === false) {
+                // means we explicitly invoke this after temporary changes, so reset the temporary changes first
+                this.target.querySelectorAll(selector).forEach(e => {
+                    for(let x in style) {
+                        e.style[x] = "";
+                    }
+                })
             }
-            vein.inject(selector, style);
+            vein.inject(this.baseSelector + " " + selector, style);
         }
     }
 
@@ -1276,36 +1297,50 @@ class PowerGrid {
         const columns = this.options.columns;
         let x = 0;
         const l = columns.length;
-        for(; x < l; x++) {
+        for (; x < l; x++) {
             const column = columns[x];
             const w = this.columnWidth(x);
 
             let fullWidth = this.options.fullWidth && x < this.options.columns.length - this.options.frozenColumnsRight;
-            for(let xx=x+1; fullWidth && xx < this.options.columns.length - this.options.frozenColumnsRight; xx++) {
-                if(!this.isColumnHidden(this.options.columns[xx])) {
+            for (let xx = x + 1; fullWidth && xx < this.options.columns.length - this.options.frozenColumnsRight; xx++) {
+                if (!this.isColumnHidden(this.options.columns[xx])) {
                     fullWidth = false;
                 }
             }
 
-            if(fullWidth) {
-                this._updateStyle(temporary, this.baseSelector + " .pg-column" + this.normalizeCssClass(column.key), {"width": "auto", "min-width": w + "px", "right": "0"});
+            if (fullWidth) {
+                this._updateStyle(temporary, ".pg-column" + this.normalizeCssClass(column.key), {
+                    "width": "auto",
+                    "min-width": w + "px",
+                    "right": "0"
+                });
             } else {
-                this._updateStyle(temporary, this.baseSelector + " .pg-column" + this.normalizeCssClass(column.key), {"width": w + "px", "right": "auto"});
+                this._updateStyle(temporary, ".pg-column" + this.normalizeCssClass(column.key), {
+                    "width": w + "px",
+                    "right": "auto"
+                });
             }
         }
 
         const leadingWidth = this.columnWidth(0, this.options.frozenColumnsLeft);
         const middleWidth = this.columnWidth(this.options.frozenColumnsLeft, this.options.columns.length - this.options.frozenColumnsRight);
         const trailingWidth = this.columnWidth(this.options.columns.length - this.options.frozenColumnsRight, this.options.columns.length);
-        this.fixedLeft.css("width", leadingWidth + "px");
-        this.fixedRight.css("width", trailingWidth + "px");
-        this.columnheadergroup.right && this.columnheadergroup.right.css("width", (trailingWidth + scrollBarSize.width) + "px");
-        const minWidth = 'calc(100% - ' + leadingWidth + 'px - ' + trailingWidth + 'px)';
-        this.middleScrollers.css({"left": leadingWidth + "px", "width": middleWidth + "px", "min-width":  minWidth});
-        this.scrollFiller.css({"width": (leadingWidth + middleWidth + trailingWidth) + "px"});
 
-        if(this.options.autoResize) {
-            this.container.css({"width": (this.columnWidth(0, this.options.columns.length)) + "px" });
+        this.fixedLeft.forEach(e => e.style.width = leadingWidth + "px");
+        this.fixedRight.forEach(e => e.style.width = trailingWidth + "px");
+        if (this.columnheadergroup.right) this.columnheadergroup.right.style.width = (trailingWidth + scrollBarSize.width) + "px";
+
+        const minWidth = 'calc(100% - ' + leadingWidth + 'px - ' + trailingWidth + 'px)';
+        this.middleScrollers.forEach(e => {
+            e.style.left = leadingWidth + "px";
+            e.style.width = middleWidth + "px";
+            e.style.minWidth = minWidth
+        });
+
+        this.scrollFiller.style.width = (leadingWidth + middleWidth + trailingWidth) + "px";
+
+        if (this.options.autoResize) {
+            this.container.style.width = this.columnWidth(0, this.options.columns.length) + "px";
         }
     }
 
@@ -1316,19 +1351,25 @@ class PowerGrid {
         const columnHeaderHeight = this.headerContainerHeight();
         const headerHeight = this.rowHeight(0, this.options.frozenRowsTop);
         const footerHeight = this.rowHeight(this.getRecordCount() - this.options.frozenRowsBottom, this.getRecordCount());
-        this.columnheadercontainer.css("height", (columnHeaderHeight) + "px");
-        this.columnheadergroup.all.css("height", (this.headerHeight()) + "px");
+        this.columnheadercontainer.style.height = (columnHeaderHeight) + "px";
+        this.columnheadergroup.all.forEach(e => e.style.height = (this.headerHeight()) + "px");
 
-        this.headercontainer && this.headercontainer.css("height", (headerHeight) + "px").css("top", (columnHeaderHeight) + "px");
-        this.footercontainer && this.footercontainer.css("height", (footerHeight) + "px");
+        if(this.headercontainer) {
+            this.headercontainer.style.height = (headerHeight) + "px";
+            this.headercontainer.style.top = (columnHeaderHeight) + "px";
+        }
+        if(this.footercontainer) {
+            this.footercontainer.style.height = (footerHeight) + "px";
+        }
 
-        this.scrollingcontainer.css("top", (columnHeaderHeight + headerHeight) + "px").css("bottom", (footerHeight + (this.options.autoResize ? 0 : scrollBarSize.height)) + "px");
+        this.scrollingcontainer.style.top = (columnHeaderHeight + headerHeight) + "px";
+        this.scrollingcontainer.style.bottom = (footerHeight + (this.options.autoResize ? 0 : scrollBarSize.height)) + "px";
 
-        this.scroller.css("top", columnHeaderHeight + "px");
-        this.scrollFiller.css({"height": this.rowHeight(0, this.getRecordCount()) + this.scroller.height() - this.scrollingcontainer.height() });
+        this.scroller.style.top = columnHeaderHeight + "px";
+        this.scrollFiller.style.height = this.rowHeight(0, this.getRecordCount()) + this.scroller.offsetHeight - this.scrollingcontainer.offsetHeight + "px";
 
-        if(this.options.autoResize) {
-            this.container.css({"height": (this.rowHeight(0, this.getRecordCount()) + columnHeaderHeight) + "px"});
+        if (this.options.autoResize) {
+            this.container.style.height = (this.rowHeight(0, this.getRecordCount()) + columnHeaderHeight) + "px";
         }
     }
 
@@ -1346,7 +1387,7 @@ class PowerGrid {
      * @returns {number} The height in pixels.
      */
     headerHeight() {
-        return Math.max.apply(undefined, this.target.find(".pg-columnheader span").map((i, e) => $(e).outerHeight()));
+        return Math.max(...Array.from(this.target.querySelectorAll(".pg-columnheader span")).map(e => e.offsetHeight));
     }
 
     /**
@@ -1361,13 +1402,13 @@ class PowerGrid {
         const positions = new Array(this.options.length);
         let x = 0;
         const l = columns.length;
-        for(; x<l; x++) {
+        for (; x < l; x++) {
             const column = columns[x];
-            if(x == this.options.frozenColumnsLeft || l-x == this.options.frozenColumnsRight) {
+            if (x === this.options.frozenColumnsLeft || l - x === this.options.frozenColumnsRight) {
                 pos = 0;
             }
             positions[x] = pos;
-            this._updateStyle(temporary, this.baseSelector + " .pg-column" + this.normalizeCssClass(column.key), {left: pos + "px"});
+            this._updateStyle(temporary, ".pg-column" + this.normalizeCssClass(column.key), {left: pos + "px"});
             column.offsetLeft = pos;
 
             pos += this.columnWidth(x);
@@ -1384,7 +1425,7 @@ class PowerGrid {
      */
     queueRenderUpdate() {
         const self = this;
-        if(this.renderQueue == undefined) {
+        if (this.renderQueue == undefined) {
             this.renderQueue = {callbacks: []};
             utils.inAnimationFrame(() => {
                 self.processRenderQueue(self.renderQueue);
@@ -1406,19 +1447,19 @@ class PowerGrid {
      * @param queue
      */
     processRenderQueue(queue) {
-        if(queue.syncScroll) {
+        if (queue.syncScroll) {
             this.syncScroll(true);
         }
 
-        if(queue.updateViewport) {
+        if (queue.updateViewport) {
             this.updateViewport();
         }
 
-        if(queue.adjustColumnPositions) {
+        if (queue.adjustColumnPositions) {
             this.adjustColumnPositions(queue.columnPositionsTemporary);
         }
 
-        if(queue.adjustHeights) {
+        if (queue.adjustHeights) {
             this.adjustHeights();
         }
     }
@@ -1429,9 +1470,9 @@ class PowerGrid {
      */
     queueAdjustColumnPositions(temporary) {
         const q = this.queueRenderUpdate();
-        if(!temporary) {
+        if (!temporary) {
             q.columnPositionsTemporary = false;
-        } else if(q.columnPositionsTemporary === undefined) {
+        } else if (q.columnPositionsTemporary === undefined) {
             q.columnPositionsTemporary = temporary;
         }
         q.adjustColumnPositions = true;
@@ -1485,7 +1526,7 @@ class PowerGrid {
      * @param {function|undefined} transform - A transformation that should be applied to each column's width before adding it
      * @returns {number} The total column width in pixels
      */
-    columnWidth(start, end, transform) {
+    columnWidth(start, end = undefined, transform = undefined) {
         const self = this;
 
         function columnWidth(x) {
@@ -1494,11 +1535,11 @@ class PowerGrid {
         }
 
         // Calculate the width of a single column, or of a range of columns
-        if(end == undefined) {
+        if (end == undefined) {
             return columnWidth(start);
         } else {
             let sum = 0;
-            while(start<end) {
+            while (start < end) {
                 sum += columnWidth(start++);
             }
             return sum;
@@ -1513,7 +1554,7 @@ class PowerGrid {
      */
     rowHeight(start, end) {
         // if end argument is passed, calculates the accumulative heights of rows start until end (exclusive)
-        if(end == undefined) {
+        if (end == undefined) {
             return this.options.rowHeight;
         } else {
             return (end - start) * this.options.rowHeight;
@@ -1530,18 +1571,18 @@ class PowerGrid {
      */
     rowsInView(top, bottom, start, end) {
         let begin = -1, ct = 0;
-        for(var x=(start||0),l=end||this.getRecordCount();x<l;x++) {
+        for (var x = (start || 0), l = end || this.getRecordCount(); x < l; x++) {
             ct += this.rowHeight(x);
-            if(ct>=top && begin===-1) {
+            if (ct >= top && begin === -1) {
                 begin = x;
-            } else if(ct > bottom) {
+            } else if (ct > bottom) {
                 break;
             }
         }
-        if(begin > -1) {
-            return { begin: begin - ((begin%2) - (this.options.frozenRowsTop%2)), end: x };
+        if (begin > -1) {
+            return {begin: begin - ((begin % 2) - (this.options.frozenRowsTop % 2)), end: x};
         } else {
-            return { begin: 0, end: 0 };
+            return {begin: 0, end: 0};
         }
     }
 
@@ -1554,21 +1595,21 @@ class PowerGrid {
     scrollBy(dX, dY) {
         const self = this;
 
-        if(
-            (dX < 0 && self.scroller[0].scrollLeft == 0) ||
-            (dX > 0 && self.scroller[0].scrollLeft == self.scroller[0].scrollWidth - self.scroller[0].offsetWidth + scrollBarSize.width) ||
-            (dY < 0 && self.scroller[0].scrollTop == 0) ||
-            (dY > 0 && self.scroller[0].scrollTop == self.scroller[0].scrollHeight - self.scroller[0].offsetHeight + scrollBarSize.height)) {
-                return false;
+        if (
+            (dX < 0 && self.scroller.scrollLeft == 0) ||
+            (dX > 0 && self.scroller.scrollLeft == self.scroller.scrollWidth - self.scroller.offsetWidth + scrollBarSize.width) ||
+            (dY < 0 && self.scroller.scrollTop == 0) ||
+            (dY > 0 && self.scroller.scrollTop == self.scroller.scrollHeight - self.scroller.offsetHeight + scrollBarSize.height)) {
+            return false;
         }
 
 
-        if(self.scrollBydY === undefined && self.scrollBydX === undefined) {
+        if (self.scrollBydY === undefined && self.scrollBydX === undefined) {
             self.scrollBydY = dY;
             self.scrollBydX = dX;
             (window.setImmediate || requestAnimationFrame)(() => {
-                self.scroller[0].scrollTop += self.scrollBydY;
-                self.scroller[0].scrollLeft += self.scrollBydX;
+                self.scroller.scrollTop += self.scrollBydY;
+                self.scroller.scrollLeft += self.scrollBydX;
                 self.scrollBydY = undefined;
                 self.scrollBydX = undefined;
                 self.afterscroll();
@@ -1587,8 +1628,8 @@ class PowerGrid {
      * @param {number} y
      */
     scrollTo(x, y) {
-        this.scroller[0].scrollTop = Math.max(0, y);
-        this.scroller[0].scrollLeft = Math.max(0, x);
+        this.scroller.scrollTop = Math.max(0, y);
+        this.scroller.scrollLeft = Math.max(0, x);
         this.afterscroll();
     }
 
@@ -1598,8 +1639,8 @@ class PowerGrid {
      */
     getScrollPosition() {
         return {
-            left: this.scroller[0].scrollLeft,
-            top: this.scroller[0].scrollTop
+            left: this.scroller.scrollLeft,
+            top: this.scroller.scrollTop
         };
     }
 
@@ -1609,8 +1650,8 @@ class PowerGrid {
      */
     getScrollAreaSize() {
         return {
-            width: this.container.children('.pg-rowgroup.pg-scrolling').children('.pg-container.pg-scrolling')[0].offsetWidth,
-            height: this.container.children('.pg-rowgroup.pg-scrolling')[0].offsetHeight
+            width: this.container.querySelector(':scope > .pg-rowgroup.pg-scrolling > .pg-container.pg-scrolling').offsetWidth,
+            height: this.container.querySelector(':scope > .pg-rowgroup.pg-scrolling').offsetHeight
         };
     }
 
@@ -1621,14 +1662,14 @@ class PowerGrid {
      * @param lazy
      */
     syncScroll(source, event, lazy) {
-        if(arguments.length == 1 && typeof(arguments[0]) == 'boolean') {
+        if (arguments.length === 1 && typeof (arguments[0]) == 'boolean') {
             lazy = arguments[0];
             source = undefined;
         }
-        if(!source) source = this.scroller[0];
-        this.container.children('.pg-scrolling').scrollTop(source.scrollTop);
-        this.middleScrollers.css('transform', 'translate(-' + source.scrollLeft + 'px,0)');
-        if(!lazy) {
+        if (!source) source = this.scroller[0];
+        this.container.querySelector(':scope > .pg-scrolling').scrollTop = source.scrollTop;
+        this.middleScrollers.forEach(e => e.style.transform = 'translate(-' + source.scrollLeft + 'px,0)');
+        if (!lazy) {
             this.afterscroll();
         }
     }
@@ -1639,7 +1680,7 @@ class PowerGrid {
      */
     afterscroll() {
         this.updateViewport();
-        $(this).trigger('scroll');
+        this.trigger('scroll');
     }
 
     /**
@@ -1649,7 +1690,9 @@ class PowerGrid {
      * @returns {jQuery}
      */
     renderHeaderCell(column, columnIdx) {
-        return $("<div class='pg-columnheader'>").append($("<span>").text(column.title));
+        return createElement("div", {class: "pg-columnheader"}, [
+            createElement("span", {}, [ document.createTextNode(column.title )])
+        ]);
     }
 
     /**
@@ -1674,7 +1717,7 @@ class PowerGrid {
         // Render the cell container
         const el = this.renderCellTemplate.cloneNode();
         const content = this.renderCellContent(record, column);
-        if(content) {
+        if (content) {
             el.appendChild(content);
         }
         return el;
@@ -1697,7 +1740,7 @@ class PowerGrid {
     updateCellValues(list) {
         let x = 0;
         const l = list.length;
-        for(; x<l; x++) {
+        for (; x < l; x++) {
             this.updateCellValue(list[x].id, list[x].key);
         }
     }
@@ -1710,10 +1753,10 @@ class PowerGrid {
         const columns = this.getVisibleColumns();
         let x = 0;
         const l = list.length;
-        for(; x<l; x++) {
+        for (; x < l; x++) {
             let y = 0;
             const cl = columns.length;
-            for(; y<cl; y++) {
+            for (; y < cl; y++) {
                 this.updateCellValue(list[x].id, columns[y].key);
             }
         }
@@ -1736,14 +1779,14 @@ class PowerGrid {
      */
     updateCellValue(rowId, key) {
         const row = this.findRow(rowId);
-        const cell = row.children(".pg-cell[data-column-key='" + key + "']");
-        if(cell.length) {
-            const record = this.dataSource.getRecordById(rowId),
-                column = this.getColumnForKey(key);
-            cell.empty();
+        const [cell] = Array.from(row).flatMap(e => Array.from(e.querySelectorAll(`:scope > .pg-cell[data-column-key='${key}']`)));
+        if (cell) {
+            const record = this.dataSource.getRecordById(rowId);
+            const column = this.getColumnForKey(key);
+            empty(cell);
             this.cellContentDisposed(record, column);
-            cell.append(this.renderCellContent(record, column));
-            this.afterCellRendered(record, column, cell[0]);
+            cell.appendChild(this.renderCellContent(record, column));
+            this.afterCellRendered(record, column, cell);
         }
     }
 
@@ -1758,15 +1801,14 @@ class PowerGrid {
     /**
      * Finds the row element for the given row id
      * @param {string} rowId
-     * @returns {jQuery}
+     * @returns NodeList
      */
     findRow(rowId) {
-        return this.container.find("> .pg-rowgroup > .pg-container > .pg-row[data-row-id='" + rowId + "']");
+        return this.container.querySelectorAll(":scope > .pg-rowgroup > .pg-container > .pg-row[data-row-id='" + rowId + "']");
     }
 
     cellValueTemplate = (() => {
-        const el = document.createElement("span");
-        return el;
+        return document.createElement("span");
     })()
 
     /**
@@ -1779,7 +1821,7 @@ class PowerGrid {
     renderCellValue(record, column, value) {
         // Render the cell content
         const el = this.cellValueTemplate.cloneNode();
-        if(value != null) {
+        if (value != null) {
             el.textContent = value;
         }
         return el;
@@ -1839,8 +1881,8 @@ class PowerGrid {
         // Returns the column for the given key
         let x = 0;
         const l = this.options.columns.length;
-        for(; x<l; x++) {
-            if(this.options.columns[x].key == key) {
+        for (; x < l; x++) {
+            if (this.options.columns[x].key == key) {
                 return x;
             }
         }
@@ -1853,37 +1895,7 @@ class PowerGrid {
      * @returns {Node}
      */
     getCellFor(rowId, key) {
-        return this.container.find(".pg-row[data-row-id='" + rowId + "'] > .pg-cell[data-column-key='" + key + "']");
-    }
-
-    /**
-     * Trigger a jQuery event on the grid and its container element
-     * @param eventName
-     * @param data
-     */
-    trigger(eventName, data) {
-        $(this).trigger(eventName, data);
-        $(this.target).trigger(eventName, data);
-    }
-
-    /**
-     * Register a event handler
-     * @param eventName
-     * @param handler
-     * @returns {jQuery}
-     */
-    on(eventName, handler) {
-        return $(this).on(eventName, handler);
-    }
-
-    /**
-     * Register a one-time event handler
-     * @param eventName
-     * @param handler
-     * @returns {jQuery}
-     */
-    one(eventName, handler) {
-        return $(this).one(eventName, handler);
+        return this.container.querySelector(".pg-row[data-row-id='" + rowId + "'] > .pg-cell[data-column-key='" + key + "']");
     }
 
     /**
@@ -1893,9 +1905,9 @@ class PowerGrid {
      * @returns {*}
      */
     getRowGroupFor(rowIndex) {
-        if(rowIndex < this.options.frozenRowsTop) {
+        if (rowIndex < this.options.frozenRowsTop) {
             return this.headergroup;
-        } else if(rowIndex > this.getRecordCount() - this.options.frozenRowsBottom) {
+        } else if (rowIndex > this.getRecordCount() - this.options.frozenRowsBottom) {
             return this.footergroup;
         } else {
             return this.scrollinggroup;
@@ -1908,7 +1920,7 @@ class PowerGrid {
      * @param rowIndex
      */
     getRowPartsForIndex(rowIndex) {
-        return this.getRowGroupFor(rowIndex).all.children(".pg-row[data-row-idx='" + rowIndex + "']");
+        return this.getRowGroupFor(rowIndex).all.flatMap(e => e.querySelectorAll(":scope > .pg-row[data-row-idx='" + rowIndex + "']"));
     }
 
     /**
@@ -1979,8 +1991,8 @@ class PowerGrid {
      * @param rows
      */
     destroyRows(rows) {
-        rows.remove();
-        if(typeof this.rowsDisposed === 'function') {
+        rows.forEach(node => node.parentNode.removeChild(node));
+        if (typeof this.rowsDisposed === 'function') {
             this.rowsDisposed(this.getIdsFromRows(rows));
         }
     }
@@ -1991,7 +2003,7 @@ class PowerGrid {
      * @param {Node[]} rows
      */
     getIdsFromRows(rows) {
-        return rows.map((i, r) => $(r).attr('data-row-id')).toArray();
+        return rows.map(r => r.getAttribute('data-row-id')).toArray();
     }
 
     /**
@@ -2001,7 +2013,7 @@ class PowerGrid {
      */
     updateRowHeight(rowIndex) {
         const parts = this.getRowPartsForIndex(rowIndex);
-        parts.css({height: this.rowHeight(rowIndex) + "px"});
+        parts.forEach(e => e.style.height = this.rowHeight(rowIndex) + "px");
     }
 
     /**
@@ -2030,7 +2042,7 @@ class PowerGrid {
         for (let g = 0; g < rowGroups.length; g++) {
             const group = rowGroups[g];
             const rows = group.children;
-            if (rows.length != this.viewport.end - this.viewport.begin) {
+            if (rows.length !== this.viewport.end - this.viewport.begin) {
                 debugger;
                 hasError = true;
                 console.error("Rowgroup does not contain expected amount of rows", group, this.viewport);
@@ -2038,7 +2050,7 @@ class PowerGrid {
                 for (let r = 0; r < rows.length; r++) {
                     const row = rows[r];
                     const record = this.workingSet[this.viewport.begin + r].record;
-                    if (parseInt(row.getAttribute("data-row-idx")) != this.viewport.begin + r) {
+                    if (parseInt(row.getAttribute("data-row-idx")) !== this.viewport.begin + r) {
                         debugger;
                         hasError = true;
                         console.error("Row does not have matching index", row, record, this.viewport, r);
@@ -2059,21 +2071,8 @@ class PowerGrid {
             langCode = 'en';
         }
 
-        const translation = key.split('.').reduce((m, key) => m[key], translations[langCode]);
-        return translation;
+        return key.split('.').reduce((m, key) => m[key], translations[langCode]);
     }
 }
-
-$.fn.extend({ PowerGrid: function(options) {
-        let d = this.data("powergrid");
-
-        if(options) {
-        if(d) d.destroy();
-        d = new PowerGrid(this, options);
-        this.data("powergrid", d);
-    }
-
-    return d;
-}});
 
 export default PowerGrid;
